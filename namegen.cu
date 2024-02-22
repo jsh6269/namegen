@@ -88,6 +88,9 @@ Tensor *htmp00, *htmp01, *htmp02;
 Tensor *htmp10, *htmp11, *htmp12;
 Tensor *ftmp0;
 
+float* exps;
+float* sm_output_gpu;
+
 /* Operations */
 /*
  * Embedding
@@ -291,29 +294,61 @@ __global__ void gpu_divide(float *input, float *output, float *exps, float divid
   output[tidx] = exps[tidx] / divider;
 }
 
+__global__ void sum_kernel(float *input, float *output, int N){
+    extern __shared__ float L[];
+    unsigned int tid = threadIdx.x;
+    unsigned int offset = blockIdx.x * blockDim.x * 2;
+    unsigned int stride = blockDim.x;
+
+    L[tid] = 0;
+    if(tid + offset < N){
+        L[tid] += input[tid + offset];
+    }
+    if(tid + stride + offset < N){
+        L[tid] += input[tid + stride + offset];
+    }
+    __syncthreads();
+
+    for(stride = blockDim.x / 2; stride > 0; stride /= 2){
+        if(tid < stride){
+            L[tid] += L[tid + stride];
+        }
+        __syncthreads();
+    }
+    if(tid == 0){
+        output[blockIdx.x] = L[0];
+    }
+}
+
+float sum_gpu(size_t num_elements, float* input_gpu, float* sm_output_gpu){
+    size_t output_elements = (num_elements + 2048 - 1) / 2048;
+
+    dim3 gridDim(output_elements);
+    dim3 blockDim(1024);
+    sum_kernel<<<gridDim, blockDim, 1024 * sizeof(float), 0>>>(input_gpu, sm_output_gpu, num_elements);
+
+    float sum = 0.0;
+    float* output_cpu = (float*)malloc(sizeof(float) * output_elements);
+    cudaMemcpy(output_cpu, sm_output_gpu, output_elements * sizeof(float), cudaMemcpyDeviceToHost);
+    for(size_t i=0; i<output_elements; i++){
+        sum += output_cpu[i];
+    }
+    return sum;
+}
 
 
 void softmax(Tensor *input, Tensor *output) {
   // no thread for softmax
   size_t n = input->num_elem();
-  float sum = 0.0;
 
   // total n
   dim3 gridDim((n + 512 - 1) / 512);
   dim3 blockDim(512);
-  float* exps;
-
-  CHECK_CUDA(cudaMalloc(&exps, sizeof(float) * n));
 
   gpu_expf<<<gridDim, blockDim>>>(input->buf, exps, n);
   // barrier?
-  float* cpu_exps;
-  CHECK_CUDA(cudaMallocHost(&cpu_exps, sizeof(float) * n));
-  CHECK_CUDA(cudaMemcpy(cpu_exps, exps, sizeof(float) * n, cudaMemcpyDeviceToHost));
 
-  for (size_t i = 0; i < n; i++) {
-    sum += cpu_exps[i];
-  }
+  float sum = sum_gpu(n, exps, sm_output_gpu);
 
   // total n
   gpu_divide<<<gridDim, blockDim>>>(input->buf, output->buf, exps, sum, n);
@@ -450,6 +485,9 @@ void namegen_initialize(int N, char *parameter_fname) {
   ftmp0 = new Tensor({NUM_CHAR});
   char_prob = new Tensor({NUM_CHAR});
 
+  CHECK_CUDA(cudaMalloc(&exps, sizeof(float) * NUM_CHAR));
+  CHECK_CUDA(cudaMalloc(&sm_output_gpu, ((NUM_CHAR + 2048 - 1) / 2048) * sizeof(float)));
+
 }
 
 /*
@@ -477,7 +515,6 @@ void namegen(int N, float *random_floats, char *output) {
   for (int n = 0; n < N; n++) {
     /* Initialize input and hidden vector. */
     /* One hidden vector for each GRU layer */
-//    input->buf[0] = SOS;
     gpu_set_val<<<1, 1>>>(input->buf, 1, SOS);
 
     dim3 gridDim1((hidden0->num_elem() + 512 - 1) / 512);
