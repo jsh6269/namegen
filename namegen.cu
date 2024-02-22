@@ -89,10 +89,6 @@ Tensor *htmp10, *htmp11, *htmp12;
 Tensor *ftmp0;
 
 /* Operations */
-int _ceil(int x, int y){
-  return (x + y - 1) / y;
-}
-
 /*
  * Embedding
  * input: [1] (scalar)
@@ -110,7 +106,7 @@ __global__ void gpu_embedding(float* input, float* weight, float* output, size_t
 
 void embedding(Tensor *input, Tensor *weight, Tensor *output) {
   size_t n = weight->shape[1];
-  dim3 gridDim(_ceil(n, 512));
+  dim3 gridDim((n + 512 - 1) / 512);
   dim3 blockDim(512);
   gpu_embedding<<<gridDim, blockDim>>>(input->buf, weight->buf, output->buf, n);
 }
@@ -132,7 +128,7 @@ __global__ void gpu_elemwise_add(float* input1, float* input2, float* output, si
 
 void elemwise_add(Tensor *input1, Tensor *input2, Tensor *output) {
   size_t sn = input1->num_elem();
-  dim3 gridDim(_ceil(sn, 512));
+  dim3 gridDim((sn + 512 - 1) / 512);
   dim3 blockDim(512);
   gpu_elemwise_add<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn);
 }
@@ -154,7 +150,7 @@ __global__ void gpu_elemwise_oneminus(float *input, float *output, size_t n){
 
 void elemwise_oneminus(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
-  dim3 gridDim(_ceil(n, 512));
+  dim3 gridDim((n + 512 - 1) / 512);
   dim3 blockDim(512);
   gpu_elemwise_oneminus<<<gridDim, blockDim>>>(input->buf, output->buf, n);
 }
@@ -176,7 +172,7 @@ __global__ void gpu_elemwise_mul(float *input1, float *input2, float *output, si
 
 void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
   size_t sn = input1->num_elem();
-  dim3 gridDim(_ceil(sn, 512));
+  dim3 gridDim((sn + 512 - 1) / 512);
   dim3 blockDim(512);
   gpu_elemwise_mul<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn);
 }
@@ -198,7 +194,7 @@ __global__ void gpu_elemwise_tanh(float *input, float *output, size_t n){
 
 void elemwise_tanh(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
-  dim3 gridDim(_ceil(n, 512));
+  dim3 gridDim((n + 512 - 1) / 512);
   dim3 blockDim(512);
   gpu_elemwise_tanh<<<gridDim, blockDim>>>(input->buf, output->buf, n);
 }
@@ -218,7 +214,7 @@ __global__ void gpu_elemwise_sigmoid(float *input, float *output, size_t n) {
 }
 void elemwise_sigmoid(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
-  dim3 gridDim(_ceil(n, 512));
+  dim3 gridDim((n + 512 - 1) / 512);
   dim3 blockDim(512);
   gpu_elemwise_sigmoid<<<gridDim, blockDim>>>(input->buf, output->buf, n);
 }
@@ -244,7 +240,7 @@ __global__ void gpu_matvec(float *gpu_input1, float *gpu_input2, float *gpu_outp
 void matvec(Tensor *input1, Tensor *input2, Tensor *output) {
   size_t N_ = input1->shape[0];
   size_t K_ = input1->shape[1];
-  dim3 gridDim(_ceil(N_, 512));
+  dim3 gridDim((N_ + 512 - 1) / 512);
   dim3 blockDim(512);
   gpu_matvec<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, N_, K_);
 }
@@ -295,13 +291,15 @@ __global__ void gpu_divide(float *input, float *output, float *exps, float divid
   output[tidx] = exps[tidx] / divider;
 }
 
+
+
 void softmax(Tensor *input, Tensor *output) {
   // no thread for softmax
   size_t n = input->num_elem();
   float sum = 0.0;
 
   // total n
-  dim3 gridDim(_ceil(n, 512));
+  dim3 gridDim((n + 512 - 1) / 512);
   dim3 blockDim(512);
   float* exps;
 
@@ -329,6 +327,8 @@ void softmax(Tensor *input, Tensor *output) {
  * rng_seq: [N*MAX_LEN],
  */
 
+// sum input[i] for 0 <= i <n
+// if sum > r 
 int random_select(float *input, float *rng_seq, int rng_offset, size_t n) {
   float r = rng_seq[rng_offset];
   float psum = 0.0;
@@ -460,12 +460,12 @@ void namegen_initialize(int N, char *parameter_fname) {
  * output: 2D-array of size N x (MAX_LEN+1), allocaetd at main.cpp
  */
 
-__global__ void gpu_set_zero(float *buf, int N) {
+__global__ void gpu_set_val(float *buf, int N, float val) {
   int tidx = blockIdx.x * blockDim.x + threadIdx.x;
   if(tidx >= N){
     return;
   }
-  buf[tidx] = 0.0;
+  buf[tidx] = val;
 }
 
 void namegen(int N, float *random_floats, char *output) {
@@ -478,16 +478,14 @@ void namegen(int N, float *random_floats, char *output) {
     /* Initialize input and hidden vector. */
     /* One hidden vector for each GRU layer */
 //    input->buf[0] = SOS;
+    gpu_set_val<<<1, 1>>>(input->buf, 1, SOS);
 
-    float tt = SOS;
-    CHECK_CUDA(cudaMemcpy(input->buf, &tt, sizeof(float), cudaMemcpyHostToDevice));
-
-    dim3 gridDim1(_ceil(hidden0->num_elem(), 512));
+    dim3 gridDim1((hidden0->num_elem() + 512 - 1) / 512);
     dim3 blockDim1(512);
-    gpu_set_zero<<<gridDim1, blockDim1>>>(hidden0->buf, hidden0->num_elem());
-    dim3 gridDim2(_ceil(hidden1->num_elem(), 512));
+    gpu_set_val<<<gridDim1, blockDim1>>>(hidden0->buf, hidden0->num_elem(), 0);
+    dim3 gridDim2((hidden1->num_elem() + 512 - 1) / 512);
     dim3 blockDim2(512);
-    gpu_set_zero<<<gridDim2, blockDim2>>>(hidden1->buf, hidden1->num_elem());
+    gpu_set_val<<<gridDim2, blockDim2>>>(hidden1->buf, hidden1->num_elem(), 0);
 
     for (int l = 0; l < MAX_LEN; l++) {
       /* Embedding */
@@ -569,8 +567,7 @@ void namegen(int N, float *random_floats, char *output) {
       CHECK_CUDA(cudaMemcpy(char_prob_cpu, char_prob->buf, sizeof(float) * lenCharProb, cudaMemcpyDeviceToHost));
       int selected_char = random_select(char_prob_cpu, rfloats, n * MAX_LEN + l, lenCharProb);
       
-      float ttt = selected_char;
-      CHECK_CUDA(cudaMemcpy(input->buf, &ttt, sizeof(float), cudaMemcpyHostToDevice));
+      gpu_set_val<<<1, 1>>>(input->buf, 1, selected_char);
       output[n * (MAX_LEN + 1) + l] = selected_char;
 
       if (selected_char == EOS)
