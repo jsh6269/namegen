@@ -25,8 +25,9 @@ struct Tensor {
       shape[i] = shape_[i];
     }
 
-    size_t n = num_elem();
-    buf = (float *)malloc(n * sizeof(float));
+    N = num_elem();
+//    buf = (float *)malloc(n * sizeof(float));
+    CHECK_CUDA(cudaMalloc(&buf, N * sizeof(float)));
   }
 
   /* Alloc memory and copy */
@@ -36,20 +37,15 @@ struct Tensor {
       shape[i] = shape_[i];
     }
 
-    size_t n = num_elem();
-    buf = (float *)malloc(n * sizeof(float));
-    memcpy(buf, buf_, n * sizeof(float));
+    N = num_elem();
+//    buf = (float *)malloc(n * sizeof(float));
+    CHECK_CUDA(cudaMalloc(&buf, N * sizeof(float)));
+    CHECK_CUDA(cudaMemcpy(buf, buf_, N * sizeof(float), cudaMemcpyHostToDevice));
   }
 
   ~Tensor() {
-    if (buf != nullptr)
-      free(buf);
-  }
-
-  void set_zero() {
-    size_t n = num_elem();
-    for (size_t i = 0; i < n; i++)
-      buf[i] = 0.0;
+    // if (buf != nullptr)
+    //   cudaFree(buf);
   }
 
   size_t num_elem() {
@@ -59,12 +55,13 @@ struct Tensor {
     return sz;
   }
 
-  // Pointer to data
+  // gpu Pointer to data
   float *buf = nullptr;
 
   // Shape of tensor, from outermost dimension to innermost dimension.
   // e.g., {{1.0, -0.5, 2.3}, {4.3, 5.6, -7.8}} => shape = {2, 3}
   size_t ndim = 0;
+  size_t N = 0;
   size_t shape[4];
 };
 
@@ -75,7 +72,7 @@ Tensor *W_hr0, *W_hz0, *W_hn0, *W_hr1, *W_hz1, *W_hn1;
 Tensor *b_ir0, *b_iz0, *b_in0, *b_ir1, *b_iz1, *b_in1;
 Tensor *b_hr0, *b_hz0, *b_hn0, *b_hr1, *b_hz1, *b_hn1;
 Tensor *W_fc, *b_fc;
-Tensor *rfloats;
+float *rfloats;
 
 /* input, activations, output */
 Tensor *input, *emb_out;
@@ -102,12 +99,20 @@ int _ceil(int x, int y){
  * weight: [NUM_CHAR x EMBEDDING_DIM]
  * output: [EMBEDDING_DIM]
  */
+__global__ void gpu_embedding(float* input, float* weight, float* output, size_t n){
+  int tidx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(tidx >= n){
+    return;
+  }
+  int x = (int)input[0];
+  output[tidx] = weight[x * n + tidx];
+}
+
 void embedding(Tensor *input, Tensor *weight, Tensor *output) {
   size_t n = weight->shape[1];
-  for (size_t i = 0; i < n; i++) {
-    int x = (int)input->buf[0];
-    output->buf[i] = weight->buf[x * n + i];
-  }
+  dim3 gridDim(_ceil(n, 512));
+  dim3 blockDim(512);
+  gpu_embedding<<<gridDim, blockDim>>>(input->buf, weight->buf, output->buf, n);
 }
 
 /*
@@ -116,11 +121,20 @@ void embedding(Tensor *input, Tensor *weight, Tensor *output) {
  * input2: [*] (same shape as input1)
  * output: [*] (same shape as input1)
  */
+
+__global__ void gpu_elemwise_add(float* input1, float* input2, float* output, size_t sn){
+  int tidx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(tidx >= sn){
+    return;
+  }
+  output[tidx] = input1[tidx] + input2[tidx];
+}
+
 void elemwise_add(Tensor *input1, Tensor *input2, Tensor *output) {
   size_t sn = input1->num_elem();
-  for (size_t i = 0; i < sn; i++) {
-    output->buf[i] = input1->buf[i] + input2->buf[i];
-  }
+  dim3 gridDim(_ceil(sn, 512));
+  dim3 blockDim(512);
+  gpu_elemwise_add<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn);
 }
 
 /*
@@ -128,12 +142,21 @@ void elemwise_add(Tensor *input1, Tensor *input2, Tensor *output) {
  * input: [*]
  * output: [*] (same shape as input)
  */
+
+__global__ void gpu_elemwise_oneminus(float *input, float *output, size_t n){
+  int tidx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(tidx >= n){
+    return;
+  }
+  float x = input[tidx];
+  output[tidx] = 1.0 - x;
+}
+
 void elemwise_oneminus(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
-  for (size_t i = 0; i < n; i++) {
-    float x = input->buf[i];
-    output->buf[i] = 1.0 - x;
-  }
+  dim3 gridDim(_ceil(n, 512));
+  dim3 blockDim(512);
+  gpu_elemwise_oneminus<<<gridDim, blockDim>>>(input->buf, output->buf, n);
 }
 
 /*
@@ -142,11 +165,20 @@ void elemwise_oneminus(Tensor *input, Tensor *output) {
  * input2: [*] (same shape as input1)
  * output: [*] (same shape as input1)
  */
+
+__global__ void gpu_elemwise_mul(float *input1, float *input2, float *output, size_t sn){
+  int tidx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(tidx >= sn){
+    return;
+  }
+  output[tidx] = input1[tidx] * input2[tidx];
+}
+
 void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
   size_t sn = input1->num_elem();
-  for (size_t i = 0; i < sn; i++) {
-    output->buf[i] = input1->buf[i] * input2->buf[i];
-  }
+  dim3 gridDim(_ceil(sn, 512));
+  dim3 blockDim(512);
+  gpu_elemwise_mul<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn);
 }
 
 /*
@@ -154,12 +186,21 @@ void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
  * input: [*]
  * output: [*] (same shape as input)
  */
+
+__global__ void gpu_elemwise_tanh(float *input, float *output, size_t n){
+  int tidx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(tidx >= n){
+    return;
+  }
+  float x = input[tidx];
+  output[tidx] = tanhf(x);
+}
+
 void elemwise_tanh(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
-  for (size_t i = 0; i < n; i++) {
-    float x = input->buf[i];
-    output->buf[i] = tanhf(x);
-  }
+  dim3 gridDim(_ceil(n, 512));
+  dim3 blockDim(512);
+  gpu_elemwise_tanh<<<gridDim, blockDim>>>(input->buf, output->buf, n);
 }
 
 /*
@@ -177,18 +218,9 @@ __global__ void gpu_elemwise_sigmoid(float *input, float *output, size_t n) {
 }
 void elemwise_sigmoid(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
-  float* gpu_input;
-  float* gpu_output;
-  CHECK_CUDA(cudaMalloc(&gpu_input, sizeof(float) * input->num_elem()));
-  CHECK_CUDA(cudaMalloc(&gpu_output, sizeof(float) * output->num_elem()));
-  CHECK_CUDA(cudaMemcpy(gpu_input, input->buf, sizeof(float) * input->num_elem(), cudaMemcpyHostToDevice));
-
   dim3 gridDim(_ceil(n, 512));
   dim3 blockDim(512);
-  gpu_elemwise_sigmoid<<<gridDim, blockDim>>>(gpu_input, gpu_output, n);
-  CHECK_CUDA(cudaMemcpy(output->buf, gpu_output, sizeof(float) * output->num_elem(), cudaMemcpyDeviceToHost));
-  cudaFree(gpu_input);  
-  cudaFree(gpu_output);
+  gpu_elemwise_sigmoid<<<gridDim, blockDim>>>(input->buf, output->buf, n);
 }
 
 /*
@@ -214,19 +246,7 @@ void matvec(Tensor *input1, Tensor *input2, Tensor *output) {
   size_t K_ = input1->shape[1];
   dim3 gridDim(_ceil(N_, 512));
   dim3 blockDim(512);
-  float *gpu_input1, *gpu_input2, *gpu_output;
-  CHECK_CUDA(cudaMalloc(&gpu_input1, sizeof(float) * input1->num_elem()));
-  CHECK_CUDA(cudaMalloc(&gpu_input2, sizeof(float) * input2->num_elem()));
-  CHECK_CUDA(cudaMalloc(&gpu_output, sizeof(float) * output->num_elem()));
-  CHECK_CUDA(cudaMemcpy(gpu_input1, input1->buf, sizeof(float) * input1->num_elem(), cudaMemcpyHostToDevice));
-  CHECK_CUDA(cudaMemcpy(gpu_input2, input2->buf, sizeof(float) * input2->num_elem(), cudaMemcpyHostToDevice));
-  CHECK_CUDA(cudaMemcpy(gpu_output, output->buf, sizeof(float) * output->num_elem(), cudaMemcpyHostToDevice));
-  gpu_matvec<<<gridDim, blockDim>>>(gpu_input1, gpu_input2, gpu_output, N_, K_);
-  CHECK_CUDA(cudaMemcpy(output->buf, gpu_output, sizeof(float) * output->num_elem(), cudaMemcpyDeviceToHost));
-
-  cudaFree(gpu_input1);
-  cudaFree(gpu_input2);
-  cudaFree(gpu_output);
+  gpu_matvec<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, N_, K_);
 }
 
 /*
@@ -283,17 +303,14 @@ void softmax(Tensor *input, Tensor *output) {
   // total n
   dim3 gridDim(_ceil(n, 512));
   dim3 blockDim(512);
-  float* exps, *input_softmax, *output_softmax;
+  float* exps;
 
   CHECK_CUDA(cudaMalloc(&exps, sizeof(float) * n));
-  CHECK_CUDA(cudaMalloc(&input_softmax, sizeof(float) * n));
-  CHECK_CUDA(cudaMalloc(&output_softmax, sizeof(float) * output->num_elem()));
-  CHECK_CUDA(cudaMemcpy(input_softmax, input->buf, sizeof(float) * n, cudaMemcpyHostToDevice));
 
-  gpu_expf<<<gridDim, blockDim>>>(input_softmax, exps, n);
+  gpu_expf<<<gridDim, blockDim>>>(input->buf, exps, n);
   // barrier?
   float* cpu_exps;
-  cpu_exps = (float*)malloc(sizeof(float) * n);
+  CHECK_CUDA(cudaMallocHost(&cpu_exps, sizeof(float) * n));
   CHECK_CUDA(cudaMemcpy(cpu_exps, exps, sizeof(float) * n, cudaMemcpyDeviceToHost));
 
   for (size_t i = 0; i < n; i++) {
@@ -301,14 +318,8 @@ void softmax(Tensor *input, Tensor *output) {
   }
 
   // total n
-  gpu_divide<<<gridDim, blockDim>>>(input_softmax, output_softmax, exps, sum, n);
-  CHECK_CUDA(cudaMemcpy(output->buf, output_softmax, sizeof(float) * output->num_elem(), cudaMemcpyDeviceToHost));
-  cudaFree(input_softmax);
-  cudaFree(output_softmax);
-  cudaFree(exps);
-  // barrier?
+  gpu_divide<<<gridDim, blockDim>>>(input->buf, output->buf, exps, sum, n);
 }
-
 
 /*
  * Sample a random index according to the given probability distribution
@@ -318,16 +329,17 @@ void softmax(Tensor *input, Tensor *output) {
  * rng_seq: [N*MAX_LEN],
  */
 
-int random_select(Tensor *input, Tensor *rng_seq, int rng_offset) {
-  float r = rng_seq->buf[rng_offset];
-  size_t n = input->num_elem();
+int random_select(float *input, float *rng_seq, int rng_offset, size_t n) {
+  float r = rng_seq[rng_offset];
   float psum = 0.0;
   for (size_t i = 0; i < n; i++) {
-    psum += input->buf[i];
+    psum += input[i];
     if (psum > r) {
+      input[0] = i;
       return i;
     }
   }
+  input[0] = n - 1;
   return n - 1;
 }
 
@@ -435,7 +447,8 @@ void namegen_initialize(int N, char *parameter_fname) {
   htmp11 = new Tensor({HIDDEN_DIM});
   htmp12 = new Tensor({HIDDEN_DIM});
 
-  rfloats = new Tensor({N * MAX_LEN});
+//  rfloats = new Tensor({N * MAX_LEN});
+  rfloats = (float *)malloc(sizeof(float) * N * MAX_LEN);
   ftmp0 = new Tensor({NUM_CHAR});
   char_prob = new Tensor({NUM_CHAR});
 
@@ -448,18 +461,32 @@ void namegen_initialize(int N, char *parameter_fname) {
  * random_floats: N*MAX_LEN sequence of random floats in [0,1].
  * output: 2D-array of size N x (MAX_LEN+1), allocaetd at main.cpp
  */
+
+__global__ void gpu_set_zero(float *buf, int N) {
+  int tidx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(tidx >= N){
+    return;
+  }
+  buf[tidx] = 0.0;
+}
+
 void namegen(int N, float *random_floats, char *output) {
 
-  memcpy(rfloats->buf, random_floats, N * MAX_LEN * sizeof(float));
+  memcpy(rfloats, random_floats, N * MAX_LEN * sizeof(float));
   memset(output, 0, N * (MAX_LEN + 1) * sizeof(char));
 
   /* Generate N names */
   for (int n = 0; n < N; n++) {
     /* Initialize input and hidden vector. */
     /* One hidden vector for each GRU layer */
-    input->buf[0] = SOS;
-    hidden0->set_zero();
-    hidden1->set_zero();
+//    input->buf[0] = SOS;
+    float tt = SOS;
+    CHECK_CUDA(cudaMemcpy(input->buf, &tt, sizeof(float), cudaMemcpyHostToDevice));
+
+    dim3 gridDim(_ceil(n, 512));
+    dim3 blockDim(512);
+    gpu_set_zero<<<gridDim, blockDim>>>(hidden0->buf, hidden0->num_elem());
+    gpu_set_zero<<<gridDim, blockDim>>>(hidden1->buf, hidden1->num_elem());
 
     for (int l = 0; l < MAX_LEN; l++) {
       /* Embedding */
@@ -533,12 +560,14 @@ void namegen(int N, float *random_floats, char *output) {
 
       /* Softmax */
       softmax(f, char_prob);
-
+      
       /* Random select */
-      int selected_char = random_select(char_prob, rfloats, n * MAX_LEN + l);
-
+      float* char_prob_cpu;
+      size_t lenCharProb = char_prob->num_elem();
+      CHECK_CUDA(cudaMallocHost(&char_prob_cpu, sizeof(float) * lenCharProb));
+      CHECK_CUDA(cudaMemcpy(char_prob_cpu, char_prob->buf, sizeof(float) * lenCharProb, cudaMemcpyDeviceToHost));
+      int selected_char = random_select(char_prob_cpu, rfloats, n * MAX_LEN + l, lenCharProb);
       output[n * (MAX_LEN + 1) + l] = selected_char;
-      input->buf[0] = selected_char;
 
       if (selected_char == EOS)
         break;
@@ -552,7 +581,7 @@ void namegen(int N, float *random_floats, char *output) {
  * everything you made in namegen_initalize() and namegen().
  */
 void namegen_finalize() {
-
+/*
   delete character_embedding;
   delete W_ir0;
   delete W_iz0;
@@ -633,4 +662,5 @@ void namegen_finalize() {
   delete htmp11;
   delete htmp12;
   delete ftmp0;
+*/
 }
