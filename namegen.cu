@@ -335,11 +335,9 @@ int random_select(float *input, float *rng_seq, int rng_offset, size_t n) {
   for (size_t i = 0; i < n; i++) {
     psum += input[i];
     if (psum > r) {
-      input[0] = i;
       return i;
     }
   }
-  input[0] = n - 1;
   return n - 1;
 }
 
@@ -480,13 +478,16 @@ void namegen(int N, float *random_floats, char *output) {
     /* Initialize input and hidden vector. */
     /* One hidden vector for each GRU layer */
 //    input->buf[0] = SOS;
+
     float tt = SOS;
     CHECK_CUDA(cudaMemcpy(input->buf, &tt, sizeof(float), cudaMemcpyHostToDevice));
 
-    dim3 gridDim(_ceil(n, 512));
-    dim3 blockDim(512);
-    gpu_set_zero<<<gridDim, blockDim>>>(hidden0->buf, hidden0->num_elem());
-    gpu_set_zero<<<gridDim, blockDim>>>(hidden1->buf, hidden1->num_elem());
+    dim3 gridDim1(_ceil(hidden0->num_elem(), 512));
+    dim3 blockDim1(512);
+    gpu_set_zero<<<gridDim1, blockDim1>>>(hidden0->buf, hidden0->num_elem());
+    dim3 gridDim2(_ceil(hidden1->num_elem(), 512));
+    dim3 blockDim2(512);
+    gpu_set_zero<<<gridDim2, blockDim2>>>(hidden1->buf, hidden1->num_elem());
 
     for (int l = 0; l < MAX_LEN; l++) {
       /* Embedding */
@@ -567,6 +568,9 @@ void namegen(int N, float *random_floats, char *output) {
       CHECK_CUDA(cudaMallocHost(&char_prob_cpu, sizeof(float) * lenCharProb));
       CHECK_CUDA(cudaMemcpy(char_prob_cpu, char_prob->buf, sizeof(float) * lenCharProb, cudaMemcpyDeviceToHost));
       int selected_char = random_select(char_prob_cpu, rfloats, n * MAX_LEN + l, lenCharProb);
+      
+      float ttt = selected_char;
+      CHECK_CUDA(cudaMemcpy(input->buf, &ttt, sizeof(float), cudaMemcpyHostToDevice));
       output[n * (MAX_LEN + 1) + l] = selected_char;
 
       if (selected_char == EOS)
