@@ -25,8 +25,9 @@ struct Tensor {
       shape[i] = shape_[i];
     }
 
-    N = num_elem();
-    CHECK_CUDA(cudaMalloc(&buf, sizeof(float) * N));
+    size_t n = num_elem();
+//    buf = (float *)malloc(n * sizeof(float));
+    CHECK_CUDA(cudaMallocHost(&buf, n * sizeof(float)));
   }
 
   /* Alloc memory and copy */
@@ -36,19 +37,20 @@ struct Tensor {
       shape[i] = shape_[i];
     }
 
-    N = num_elem();
-
-    CHECK_CUDA(cudaMalloc(&buf, sizeof(float) * N));
-    CHECK_CUDA(cudaMemcpy(buf, buf_, sizeof(float) * N, cudaMemcpyHostToDevice));
+    size_t n = num_elem();
+//    buf = (float *)malloc(n * sizeof(float));
+    CHECK_CUDA(cudaMallocHost(&buf, n * sizeof(float)));
+    memcpy(buf, buf_, n * sizeof(float));
   }
 
   ~Tensor() {
     if (buf != nullptr)
-      CHECK_CUDA(cudaFree(buf));
+      free(buf);
   }
 
-  __global__ void set_zero() {
-    for (size_t i = 0; i < N; i++)
+  void set_zero() {
+    size_t n = num_elem();
+    for (size_t i = 0; i < n; i++)
       buf[i] = 0.0;
   }
 
@@ -64,7 +66,6 @@ struct Tensor {
 
   // Shape of tensor, from outermost dimension to innermost dimension.
   // e.g., {{1.0, -0.5, 2.3}, {4.3, 5.6, -7.8}} => shape = {2, 3}
-  size_t N = 0;
   size_t ndim = 0;
   size_t shape[4];
 };
@@ -291,10 +292,10 @@ void softmax(Tensor *input, Tensor *output) {
   CHECK_CUDA(cudaMalloc(&output_softmax, sizeof(float) * output->num_elem()));
   CHECK_CUDA(cudaMemcpy(input_softmax, input->buf, sizeof(float) * n, cudaMemcpyHostToDevice));
 
-  gpu_expf<<<gridDim, blockDim>>>(input->buf, exps, n); // Here!
+  gpu_expf<<<gridDim, blockDim>>>(input_softmax, exps, n);
   // barrier?
   float* cpu_exps;
-  cpu_exps = (float*)malloc(sizeof(float) * n);
+  cudaMallocHost(&cpu_exps, sizeof(float) * n);
   CHECK_CUDA(cudaMemcpy(cpu_exps, exps, sizeof(float) * n, cudaMemcpyDeviceToHost));
 
   for (size_t i = 0; i < n; i++) {
@@ -309,7 +310,6 @@ void softmax(Tensor *input, Tensor *output) {
   cudaFree(exps);
   // barrier?
 }
-
 
 /*
  * Sample a random index according to the given probability distribution
@@ -553,7 +553,7 @@ void namegen(int N, float *random_floats, char *output) {
  * everything you made in namegen_initalize() and namegen().
  */
 void namegen_finalize() {
-
+/*
   delete character_embedding;
   delete W_ir0;
   delete W_iz0;
@@ -634,4 +634,5 @@ void namegen_finalize() {
   delete htmp11;
   delete htmp12;
   delete ftmp0;
+*/
 }
