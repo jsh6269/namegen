@@ -44,8 +44,8 @@ struct Tensor {
   }
 
   ~Tensor() {
-    // if (buf != nullptr)
-    //   cudaFree(buf);
+    if (buf != nullptr)
+      cudaFree(buf);
   }
 
   size_t num_elem() {
@@ -581,7 +581,6 @@ void namegen(int N, float *random_floats, char *output) {
  * everything you made in namegen_initalize() and namegen().
  */
 void namegen_finalize() {
-/*
   delete character_embedding;
   delete W_ir0;
   delete W_iz0;
@@ -662,5 +661,4 @@ void namegen_finalize() {
   delete htmp11;
   delete htmp12;
   delete ftmp0;
-*/
 }
