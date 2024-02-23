@@ -88,7 +88,7 @@ Tensor *htmp00, *htmp01, *htmp02;
 Tensor *htmp10, *htmp11, *htmp12;
 Tensor *ftmp0;
 
-float* exps;
+float* exps, *f1048576;
 float* sm_output_gpu;
 
 /* Operations */
@@ -109,8 +109,8 @@ __global__ void gpu_embedding(float* input, float* weight, float* output, size_t
 
 void embedding(Tensor *input, Tensor *weight, Tensor *output) {
   size_t n = weight->shape[1];
-  dim3 gridDim((n + 64 - 1) / 64);
-  dim3 blockDim(64);
+  dim3 gridDim((n + 1024 - 1) / 1024);
+  dim3 blockDim(1024);
   gpu_embedding<<<gridDim, blockDim>>>(input->buf, weight->buf, output->buf, n);
 }
 
@@ -194,8 +194,8 @@ __global__ void gpu_elemwise_mul(float *input1, float *input2, float *output, si
 
 void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
   size_t sn = input1->num_elem();
-  dim3 gridDim((sn + 64 - 1) / 64);
-  dim3 blockDim(64);
+  dim3 gridDim((sn + 1024 - 1) / 1024);
+  dim3 blockDim(1024);
   gpu_elemwise_mul<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn);
 }
 
@@ -253,8 +253,8 @@ __global__ void gpu_elemwise_sigmoid(float *input, float *output, size_t n) {
 }
 void elemwise_sigmoid(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
-  dim3 gridDim((n + 64 - 1) / 64);
-  dim3 blockDim(64);
+  dim3 gridDim((n + 1024 - 1) / 1024);
+  dim3 blockDim(1024);
   gpu_elemwise_sigmoid<<<gridDim, blockDim>>>(input->buf, output->buf, n);
 }
 
@@ -264,7 +264,19 @@ void elemwise_sigmoid(Tensor *input, Tensor *output) {
  * input2: [K]
  * output: [N]
  */
-__global__ void gpu_matvec(float *gpu_input1, float *gpu_input2, float *gpu_output, size_t N_, size_t K_) {
+
+__global__ void gpu_mat_temp(float *gpu_input1, float *gpu_input2, float *temp, size_t N_, size_t K_) {
+  int tidx = blockIdx.x * blockDim.x + threadIdx.x;
+  int tidy = blockIdx.y * blockDim.y + threadIdx.y;
+  if(tidx >= N_ || tidy >= K_){
+    return;
+  }
+  temp[N_ * tidy + tidx] = gpu_input1[tidx * K_ + tidy] * gpu_input2[tidy];
+}
+
+
+
+__global__ void gpu_matvec(float *gpu_input1, float *gpu_output, size_t N_, size_t K_) {
   int tidx = blockIdx.x * blockDim.x + threadIdx.x;
   if(tidx >= N_){
     return;
@@ -272,17 +284,23 @@ __global__ void gpu_matvec(float *gpu_input1, float *gpu_input2, float *gpu_outp
   float c = 0.0;
   #pragma unroll(64)
   for (size_t j = 0; j < K_; j++) {
-    c += gpu_input1[tidx * K_ + j] * gpu_input2[j];
+    c += gpu_input1[tidx * K_ + j];
   }
   gpu_output[tidx] = c;
 }
 
+
+
 void matvec(Tensor *input1, Tensor *input2, Tensor *output) {
   size_t N_ = input1->shape[0];
   size_t K_ = input1->shape[1];
-  dim3 gridDim((N_ + 64 - 1) / 64);
-  dim3 blockDim(64);
-  gpu_matvec<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, N_, K_);
+  dim3 gridDim((N_+32-1)/32, (K_+32-1)/32);
+  dim3 blockDim(32, 32);
+  gpu_mat_temp<<<gridDim, blockDim>>>(input1->buf, input2->buf, f1048576, N_, K_);
+
+  dim3 gridDim2((N_+512-1)/512);
+  dim3 blockDim2(512);
+  gpu_matvec<<<gridDim2, blockDim2>>>(f1048576, output->buf, N_, K_);
 }
 
 __global__ void gpu_matvecNadd(float *gpu_input1, float *gpu_input2, float *gpu_input3, float *gpu_output, size_t N_, size_t K_) {
@@ -399,8 +417,8 @@ void softmax(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
 
   // total n
-  dim3 gridDim((n + 64 - 1) / 64);
-  dim3 blockDim(64);
+  dim3 gridDim((n + 512 - 1) / 512);
+  dim3 blockDim(512);
 
   gpu_expf<<<gridDim, blockDim>>>(input->buf, exps, n);
   // barrier?
@@ -544,6 +562,8 @@ void namegen_initialize(int N, char *parameter_fname) {
 
   CHECK_CUDA(cudaMalloc(&exps, sizeof(float) * NUM_CHAR));
   CHECK_CUDA(cudaMalloc(&sm_output_gpu, ((NUM_CHAR + 2048 - 1) / 2048) * sizeof(float)));
+
+  CHECK_CUDA(cudaMalloc(&f1048576, sizeof(float) * 1048576));
 
 }
 
