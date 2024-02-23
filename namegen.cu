@@ -136,6 +136,25 @@ void elemwise_add(Tensor *input1, Tensor *input2, Tensor *output) {
   gpu_elemwise_add<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn);
 }
 
+__global__ void gpu_elemwise_add3(float* input1, float* input2, float* input3, float* input4, float* output, size_t sn){
+  int tidx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(tidx >= sn){
+    return;
+  }
+  output[tidx] = input1[tidx];
+  output[tidx] += input2[tidx];
+  output[tidx] += input3[tidx];
+  output[tidx] += input4[tidx];
+}
+
+void elemwise_add3(Tensor *input1, Tensor *input2, Tensor *input3, Tensor *input4,Tensor *output) {
+  size_t sn = input1->num_elem();
+  dim3 gridDim((sn + 64 - 1) / 64);
+  dim3 blockDim(64);
+  gpu_elemwise_add3<<<gridDim, blockDim>>>(input1->buf, input2->buf, input3->buf, input4->buf, output->buf, sn);
+}
+
+
 /*
  * Elementwise (1-x)
  * input: [*]
@@ -179,6 +198,23 @@ void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
   dim3 blockDim(64);
   gpu_elemwise_mul<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn);
 }
+
+__global__ void gpu_elemwise_mulNadd(float *input1, float *input2, float *input3, float *output, size_t sn){
+  int tidx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(tidx >= sn){
+    return;
+  }
+  output[tidx] = input1[tidx] * input2[tidx];
+  output[tidx] += input3[tidx];
+}
+
+void elemwise_mulNadd(Tensor *input1, Tensor *input2, Tensor *input3, Tensor *output) {
+  size_t sn = input1->num_elem();
+  dim3 gridDim((sn + 64 - 1) / 64);
+  dim3 blockDim(64);
+  gpu_elemwise_mulNadd<<<gridDim, blockDim>>>(input1->buf, input2->buf, input3->buf, output->buf, sn);
+}
+
 
 /*
  * Elementwise tanh(x)
@@ -246,6 +282,26 @@ void matvec(Tensor *input1, Tensor *input2, Tensor *output) {
   dim3 gridDim((N_ + 64 - 1) / 64);
   dim3 blockDim(64);
   gpu_matvec<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, N_, K_);
+}
+
+__global__ void gpu_matvecNadd(float *gpu_input1, float *gpu_input2, float *gpu_input3, float *gpu_output, size_t N_, size_t K_) {
+  int tidx = blockIdx.x * blockDim.x + threadIdx.x;
+  if(tidx >= N_){
+    return;
+  }
+  float c = 0.0;
+  for (size_t j = 0; j < K_; j++) {
+    c += gpu_input1[tidx * K_ + j] * gpu_input2[j];
+  }
+  gpu_output[tidx] = c + gpu_input3[tidx];
+}
+
+void matvecNadd(Tensor *input1, Tensor *input2, Tensor *input3, Tensor *output) {
+  size_t N_ = input1->shape[0];
+  size_t K_ = input1->shape[1];
+  dim3 gridDim((N_ + 64 - 1) / 64);
+  dim3 blockDim(64);
+  gpu_matvecNadd<<<gridDim, blockDim>>>(input1->buf, input2->buf, input3->buf, output->buf, N_, K_);
 }
 
 /*
@@ -531,68 +587,51 @@ void namegen(int N, float *random_floats, char *output) {
       /* First layer r */
       matvec(W_ir0, emb_out, rtmp00);
       matvec(W_hr0, hidden0, rtmp01);
-      elemwise_add(rtmp00, b_ir0, rtmp02);
-      elemwise_add(rtmp02, rtmp01, rtmp03);
-      elemwise_add(rtmp03, b_hr0, rtmp04);
+      elemwise_add3(rtmp00, b_ir0, rtmp01, b_hr0, rtmp04);
       elemwise_sigmoid(rtmp04, r0);
 
       /* First layer z */
       matvec(W_iz0, emb_out, ztmp00);
       matvec(W_hz0, hidden0, ztmp01);
-      elemwise_add(ztmp00, b_iz0, ztmp02);
-      elemwise_add(ztmp02, ztmp01, ztmp03);
-      elemwise_add(ztmp03, b_hz0, ztmp04);
+      elemwise_add3(ztmp00, b_iz0, ztmp01, b_hz0, ztmp04);
       elemwise_sigmoid(ztmp04, z0);
 
       /* First layer n */
-      matvec(W_in0, emb_out, ntmp00);
-      elemwise_add(ntmp00, b_in0, ntmp01);
-      matvec(W_hn0, hidden0, ntmp02);
-      elemwise_add(ntmp02, b_hn0, ntmp03);
-      elemwise_mul(r0, ntmp03, ntmp04);
-      elemwise_add(ntmp01, ntmp04, ntmp05);
+      matvecNadd(W_in0, emb_out, b_in0, ntmp01);
+      matvecNadd(W_hn0, hidden0, b_hn0, ntmp03);
+      elemwise_mulNadd(r0, ntmp03, ntmp01, ntmp05);
       elemwise_tanh(ntmp05, n0);
 
       /* First layer h (hidden) */
       elemwise_oneminus(z0, htmp00);
       elemwise_mul(htmp00, n0, htmp01);
-      elemwise_mul(z0, hidden0, htmp02);
-      elemwise_add(htmp01, htmp02, hidden0);
+      elemwise_mulNadd(z0, hidden0, htmp01, hidden0);
 
       /* Second layer r */
       matvec(W_ir1, hidden0, rtmp10);
       matvec(W_hr1, hidden1, rtmp11);
-      elemwise_add(rtmp10, b_ir1, rtmp12);
-      elemwise_add(rtmp12, rtmp11, rtmp13);
-      elemwise_add(rtmp13, b_hr1, rtmp14);
+      elemwise_add3(rtmp10, b_ir1, rtmp11, b_hr1, rtmp14);
       elemwise_sigmoid(rtmp14, r1);
 
       /* Second layer z */
       matvec(W_iz1, hidden0, ztmp10);
       matvec(W_hz1, hidden1, ztmp11);
-      elemwise_add(ztmp10, b_iz1, ztmp12);
-      elemwise_add(ztmp12, ztmp11, ztmp13);
-      elemwise_add(ztmp13, b_hz1, ztmp14);
+      elemwise_add3(ztmp10, b_iz1, ztmp11, b_hz1, ztmp14);
       elemwise_sigmoid(ztmp14, z1);
 
       /* Second layer n */
-      matvec(W_in1, hidden0, ntmp10);
-      elemwise_add(ntmp10, b_in1, ntmp11);
-      matvec(W_hn1, hidden1, ntmp12);
-      elemwise_add(ntmp12, b_hn1, ntmp13);
-      elemwise_mul(r1, ntmp13, ntmp14);
-      elemwise_add(ntmp11, ntmp14, ntmp15);
+      matvecNadd(W_in1, hidden0, b_in1, ntmp11);
+      matvecNadd(W_hn1, hidden1, b_hn1, ntmp13);
+      elemwise_mulNadd(r1, ntmp13, ntmp11, ntmp15);
       elemwise_tanh(ntmp15, n1);
 
       /* Second layer h (hidden) */
       elemwise_oneminus(z1, htmp10);
       elemwise_mul(htmp10, n1, htmp11);
-      elemwise_mul(z1, hidden1, htmp12);
-      elemwise_add(htmp11, htmp12, hidden1);
+      elemwise_mulNadd(z1, hidden1, htmp11, hidden1);
 
       /* Fully connected layer */
-      matvec(W_fc, hidden1, ftmp0);
-      elemwise_add(ftmp0, b_fc, f);
+      matvecNadd(W_fc, hidden1, b_fc, f);
 
       /* Softmax */
       softmax(f, char_prob);
