@@ -71,7 +71,8 @@ Tensor *W_ir0, *W_iz0, *W_in0, *W_ir1, *W_iz1, *W_in1;
 Tensor *W_hr0, *W_hz0, *W_hn0, *W_hr1, *W_hz1, *W_hn1;
 Tensor *b_ir0, *b_iz0, *b_in0, *b_ir1, *b_iz1, *b_in1;
 Tensor *b_hr0, *b_hz0, *b_hn0, *b_hr1, *b_hz1, *b_hn1;
-Tensor *W_fc, *b_fc, *rfloats;
+Tensor *W_fc, *b_fc;
+float *rfloats;
 
 /* input, activations, output */
 Tensor *input, *emb_out;
@@ -97,20 +98,21 @@ float* sm_output_gpu;
  * weight: [NUM_CHAR x EMBEDDING_DIM]
  * output: [EMBEDDING_DIM]
  */
-__global__ void gpu_embedding(float* input, float* weight, float* output, size_t n){
+__global__ void gpu_embedding(float* input, float* weight, float* output, size_t n, size_t N){
   int tidx = blockIdx.x * blockDim.x + threadIdx.x;
-  if(tidx >= n){
+  int tidy = blockIdx.y * blockDim.y + threadIdx.y;
+  if(tidx >= n || tidy >= N){
     return;
   }
-  int x = (int)input[0];
-  output[tidx] = weight[x * n + tidx];
+  int x = (int)input[tidy];
+  output[n * tidy + tidx] = weight[x * n + tidx];
 }
 
-void embedding(Tensor *input, Tensor *weight, Tensor *output) {
+void embedding(Tensor *input, Tensor *weight, Tensor *output, int N) {
   size_t n = weight->shape[1];
-  dim3 gridDim((n + 512 - 1) / 512);
-  dim3 blockDim(512);
-  gpu_embedding<<<gridDim, blockDim>>>(input->buf, weight->buf, output->buf, n);
+  dim3 gridDim((n  + 32 - 1) / 32, (N + 32 - 1) / 32);
+  dim3 blockDim(32, 32);
+  gpu_embedding<<<gridDim, blockDim>>>(input->buf, weight->buf, output->buf, n, N);
 }
 
 /*
@@ -119,8 +121,15 @@ void embedding(Tensor *input, Tensor *weight, Tensor *output) {
  * input2: [*] (same shape as input1)
  * output: [*] (same shape as input1)
  */
+__global__ void encounter(){
+  printf("got");
+}
 
-__global__ void gpu_elemwise_add(float* input1, float* input2, float* output, size_t sn){
+void tried(){
+    encounter<<<1, 1>>>();
+}
+
+__global__ void gpu_elemwise_add(float* input1, float* input2, float* output, size_t sn, int N){
   int tidx = blockIdx.x * blockDim.x + threadIdx.x;
   if(tidx >= sn){
     return;
@@ -128,11 +137,11 @@ __global__ void gpu_elemwise_add(float* input1, float* input2, float* output, si
   output[tidx] = input1[tidx] + input2[tidx];
 }
 
-void elemwise_add(Tensor *input1, Tensor *input2, Tensor *output) {
+void elemwise_add(Tensor *input1, Tensor *input2, Tensor *output, int N) {
   size_t sn = input1->num_elem();
-  dim3 gridDim((sn + 512 - 1) / 512);
+  dim3 gridDim((sn  + 512 - 1) / 512);
   dim3 blockDim(512);
-  gpu_elemwise_add<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn);
+  gpu_elemwise_add<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn, N);
 }
 
 /*
@@ -141,7 +150,7 @@ void elemwise_add(Tensor *input1, Tensor *input2, Tensor *output) {
  * output: [*] (same shape as input)
  */
 
-__global__ void gpu_elemwise_oneminus(float *input, float *output, size_t n){
+__global__ void gpu_elemwise_oneminus(float *input, float *output, size_t n, int N){
   int tidx = blockIdx.x * blockDim.x + threadIdx.x;
   if(tidx >= n){
     return;
@@ -150,11 +159,11 @@ __global__ void gpu_elemwise_oneminus(float *input, float *output, size_t n){
   output[tidx] = 1.0 - x;
 }
 
-void elemwise_oneminus(Tensor *input, Tensor *output) {
+void elemwise_oneminus(Tensor *input, Tensor *output, int N) {
   size_t n = input->num_elem();
-  dim3 gridDim((n + 512 - 1) / 512);
+  dim3 gridDim((n  + 512 - 1) / 512);
   dim3 blockDim(512);
-  gpu_elemwise_oneminus<<<gridDim, blockDim>>>(input->buf, output->buf, n);
+  gpu_elemwise_oneminus<<<gridDim, blockDim>>>(input->buf, output->buf, n, N);
 }
 
 /*
@@ -164,7 +173,7 @@ void elemwise_oneminus(Tensor *input, Tensor *output) {
  * output: [*] (same shape as input1)
  */
 
-__global__ void gpu_elemwise_mul(float *input1, float *input2, float *output, size_t sn){
+__global__ void gpu_elemwise_mul(float *input1, float *input2, float *output, size_t sn, int N){
   int tidx = blockIdx.x * blockDim.x + threadIdx.x;
   if(tidx >= sn){
     return;
@@ -172,11 +181,11 @@ __global__ void gpu_elemwise_mul(float *input1, float *input2, float *output, si
   output[tidx] = input1[tidx] * input2[tidx];
 }
 
-void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
+void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output, int N) {
   size_t sn = input1->num_elem();
-  dim3 gridDim((sn + 512 - 1) / 512);
+  dim3 gridDim((sn  + 512 - 1) / 512);
   dim3 blockDim(512);
-  gpu_elemwise_mul<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn);
+  gpu_elemwise_mul<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn, N);
 }
 
 /*
@@ -185,7 +194,7 @@ void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
  * output: [*] (same shape as input)
  */
 
-__global__ void gpu_elemwise_tanh(float *input, float *output, size_t n){
+__global__ void gpu_elemwise_tanh(float *input, float *output, size_t n, int N){
   int tidx = blockIdx.x * blockDim.x + threadIdx.x;
   if(tidx >= n){
     return;
@@ -194,11 +203,11 @@ __global__ void gpu_elemwise_tanh(float *input, float *output, size_t n){
   output[tidx] = tanhf(x);
 }
 
-void elemwise_tanh(Tensor *input, Tensor *output) {
+void elemwise_tanh(Tensor *input, Tensor *output, int N) {
   size_t n = input->num_elem();
-  dim3 gridDim((n + 512 - 1) / 512);
+  dim3 gridDim((n  + 512 - 1) / 512);
   dim3 blockDim(512);
-  gpu_elemwise_tanh<<<gridDim, blockDim>>>(input->buf, output->buf, n);
+  gpu_elemwise_tanh<<<gridDim, blockDim>>>(input->buf, output->buf, n, N);
 }
 
 /*
@@ -206,7 +215,7 @@ void elemwise_tanh(Tensor *input, Tensor *output) {
  * input: [*]
  * output: [*] (same shape as input)
  */
-__global__ void gpu_elemwise_sigmoid(float *input, float *output, size_t n) {
+__global__ void gpu_elemwise_sigmoid(float *input, float *output, size_t n, int N) {
   int tidx = blockIdx.x * blockDim.x + threadIdx.x;
   if(tidx >= n){
     return;
@@ -214,11 +223,11 @@ __global__ void gpu_elemwise_sigmoid(float *input, float *output, size_t n) {
   float x = input[tidx];
   output[tidx] = 1.0 / (1.0 + expf(-x));
 }
-void elemwise_sigmoid(Tensor *input, Tensor *output) {
+void elemwise_sigmoid(Tensor *input, Tensor *output, int N) {
   size_t n = input->num_elem();
-  dim3 gridDim((n + 512 - 1) / 512);
+  dim3 gridDim((n  + 512 - 1) / 512);
   dim3 blockDim(512);
-  gpu_elemwise_sigmoid<<<gridDim, blockDim>>>(input->buf, output->buf, n);
+  gpu_elemwise_sigmoid<<<gridDim, blockDim>>>(input->buf, output->buf, n, N);
 }
 
 /*
@@ -227,24 +236,25 @@ void elemwise_sigmoid(Tensor *input, Tensor *output) {
  * input2: [K]
  * output: [N]
  */
-__global__ void gpu_matvec(float *gpu_input1, float *gpu_input2, float *gpu_output, size_t N_, size_t K_) {
+__global__ void gpu_matvec(float *gpu_input1, float *gpu_input2, float *gpu_output, size_t N_, size_t K_, int N) {
   int tidx = blockIdx.x * blockDim.x + threadIdx.x;
-  if(tidx >= N_){
+  int tidy = blockIdx.y * blockDim.y + threadIdx.y;
+  if(tidx >= N_ || tidy >= N){
     return;
   }
   float c = 0.0;
   for (size_t j = 0; j < K_; j++) {
-    c += gpu_input1[tidx * K_ + j] * gpu_input2[j];
+    c += gpu_input1[N_ * K_ * tidy + tidx * K_ + j] * gpu_input2[K_ * tidy + j];
   }
-  gpu_output[tidx] = c;
+  gpu_output[N_ * tidy + tidx] = c;
 }
 
-void matvec(Tensor *input1, Tensor *input2, Tensor *output) {
+void matvec(Tensor *input1, Tensor *input2, Tensor *output, int N) {
   size_t N_ = input1->shape[0];
   size_t K_ = input1->shape[1];
-  dim3 gridDim((N_ + 512 - 1) / 512);
-  dim3 blockDim(512);
-  gpu_matvec<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, N_, K_);
+  dim3 gridDim((N_  + 32 - 1) / 32, (N + 32 - 1) / 32);
+  dim3 blockDim(32, 32);
+  gpu_matvec<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, N_, K_, N);
 }
 
 /*
@@ -276,81 +286,62 @@ void matmul(Tensor *input1, Tensor *input2, Tensor *output) {
  * output: [*], (same shape as input)
  */
 
-__global__ void gpu_expf(float *input, float *exArr, size_t n) {
+__global__ void gpu_expf(float *input, float *exArr, size_t n, int N) {
   int tidx = blockIdx.x * blockDim.x + threadIdx.x;  
-  if(tidx >= n){
+  int tidy = 0;
+  if(tidx >= n || tidy >= N){
     return;
   }
-  float x = input[tidx];
-  exArr[tidx] = expf(x);
+  float x = input[n * tidy + tidx];
+  exArr[n * tidy + tidx] = expf(x);
 }
 
-__global__ void gpu_divide(float *input, float *output, float *exps, float divider, size_t n){
+__global__ void gpu_divide(float *input, float *output, float *exps, float divider, size_t n, int N){
   int tidx = blockIdx.x * blockDim.x + threadIdx.x;
-  if(tidx >= n){
+  int tidy = 0;
+  if(tidx >= n || tidy >= N){
     return;
   }
-  output[tidx] = exps[tidx] / divider;
-}
-
-__global__ void sum_kernel(float *input, float *output, int N){
-    extern __shared__ float L[];
-    unsigned int tid = threadIdx.x;
-    unsigned int offset = blockIdx.x * blockDim.x * 2;
-    unsigned int stride = blockDim.x;
-
-    L[tid] = 0;
-    if(tid + offset < N){
-        L[tid] += input[tid + offset];
-    }
-    if(tid + stride + offset < N){
-        L[tid] += input[tid + stride + offset];
-    }
-    __syncthreads();
-
-    for(stride = blockDim.x / 2; stride > 0; stride /= 2){
-        if(tid < stride){
-            L[tid] += L[tid + stride];
-        }
-        __syncthreads();
-    }
-    if(tid == 0){
-        output[blockIdx.x] = L[0];
-    }
-}
-
-float sum_gpu(size_t num_elements, float* input_gpu, float* sm_output_gpu){
-    size_t output_elements = (num_elements + 2048 - 1) / 2048;
-
-    dim3 gridDim(output_elements);
-    dim3 blockDim(1024);
-    sum_kernel<<<gridDim, blockDim, 1024 * sizeof(float), 0>>>(input_gpu, sm_output_gpu, num_elements);
-
-    float sum = 0.0;
-    float* output_cpu = (float*)malloc(sizeof(float) * output_elements);
-    cudaMemcpy(output_cpu, sm_output_gpu, output_elements * sizeof(float), cudaMemcpyDeviceToHost);
-    for(size_t i=0; i<output_elements; i++){
-        sum += output_cpu[i];
-    }
-    return sum;
+  output[n * tidy + tidx] = exps[n * tidy + tidx] / divider;
 }
 
 
-void softmax(Tensor *input, Tensor *output) {
+void softmax(Tensor *input, Tensor *output, int N) {
   // no thread for softmax
-  size_t n = input->num_elem();
+  encounter<<<1, 1>>>();
+
+  size_t n = input->shape[0];
 
   // total n
-  dim3 gridDim((n + 512 - 1) / 512);
+  dim3 gridDim((n*N + 512 - 1) / 512);
   dim3 blockDim(512);
 
-  gpu_expf<<<gridDim, blockDim>>>(input->buf, exps, n);
+  float* exps;
+
+
+  CHECK_CUDA(cudaMalloc(&exps, sizeof(float) * n * N));
+
+//  printf("%d ", (N + 32 - 1) / 32);
+  gpu_expf<<<gridDim, blockDim>>>(input->buf, exps, n, N);
   // barrier?
+  float* cpu_exps = (float*)malloc(sizeof(float) * n * N);
+//  CHECK_CUDA(cudaMallocHost(&cpu_exps, sizeof(float) * n * N));
 
-  float sum = sum_gpu(n, exps, sm_output_gpu);
+//  CHECK_CUDA(cudaMemcpy(cpu_exps, exps, sizeof(float) * n * N, cudaMemcpyDeviceToHost));
 
+    // for (int s=0; s<N; s++){
+    //   float sum = 0.0;
+    //   for (size_t i = 0; i < n; i++) {
+    //     sum += cpu_exps[s * n + i];
+    //   }
+    //   for (size_t i = 0; i < n; i++) {
+    //     cpu_exps[s * n + i] /= sum;
+    //   }
+    // }
+
+  //  CHECK_CUDA(cudaMemcpy(exps, cpu_exps, sizeof(float) * n * N, cudaMemcpyHostToDevice));
   // total n
-  gpu_divide<<<gridDim, blockDim>>>(input->buf, output->buf, exps, sum, n);
+  // gpu_divide<<<gridDim, blockDim>>>(input->buf, output->buf, exps, 1, n, N);
 }
 
 /*
@@ -363,20 +354,16 @@ void softmax(Tensor *input, Tensor *output) {
 
 // sum input[i] for 0 <= i <n
 // if sum > r 
-
-__global__ void gpu_random_select(float* char_prob, float* rng_seq, int rng_offset, size_t n, int* output){
-  // gpu_random_select<<<1, 1>>>(char_prob, rfloats->buf, n * MAX_LEN + 1, char_prob->num_elem(), selected_char_gpu);
+int random_select(float *input, float *rng_seq, int rng_offset, size_t n) {
   float r = rng_seq[rng_offset];
   float psum = 0.0;
   for (size_t i = 0; i < n; i++) {
-    psum += char_prob[i];
+    psum += input[i];
     if (psum > r) {
-      *output = i;
-      return;
+      return i;
     }
   }
-  *output = n - 1;
-  return;
+  return n - 1;
 }
 
 /*
@@ -427,67 +414,68 @@ void namegen_initialize(int N, char *parameter_fname) {
   b_fc = new Tensor({NUM_CHAR}, parameter + OFFSET26);
 
   /* input, activations, output, etc. */
-  input = new Tensor({1});
-  emb_out = new Tensor({EMBEDDING_DIM});
+  input = new Tensor({1, N});
+  emb_out = new Tensor({EMBEDDING_DIM, N});
 
-  hidden0 = new Tensor({HIDDEN_DIM});
-  hidden1 = new Tensor({HIDDEN_DIM});
+  hidden0 = new Tensor({HIDDEN_DIM, N});
+  hidden1 = new Tensor({HIDDEN_DIM, N});
 
-  r0 = new Tensor({HIDDEN_DIM});
-  r1 = new Tensor({HIDDEN_DIM});
-  z0 = new Tensor({HIDDEN_DIM});
-  z1 = new Tensor({HIDDEN_DIM});
-  n0 = new Tensor({HIDDEN_DIM});
-  n1 = new Tensor({HIDDEN_DIM});
-  f = new Tensor({NUM_CHAR});
+  r0 = new Tensor({HIDDEN_DIM, N});
+  r1 = new Tensor({HIDDEN_DIM, N});
+  z0 = new Tensor({HIDDEN_DIM, N});
+  z1 = new Tensor({HIDDEN_DIM, N});
+  n0 = new Tensor({HIDDEN_DIM, N});
+  n1 = new Tensor({HIDDEN_DIM, N});
+  f = new Tensor({NUM_CHAR, N});
 
-  rtmp00 = new Tensor({HIDDEN_DIM});
-  rtmp01 = new Tensor({HIDDEN_DIM});
-  rtmp02 = new Tensor({HIDDEN_DIM});
-  rtmp03 = new Tensor({HIDDEN_DIM});
-  rtmp04 = new Tensor({HIDDEN_DIM});
-  rtmp10 = new Tensor({HIDDEN_DIM});
-  rtmp11 = new Tensor({HIDDEN_DIM});
-  rtmp12 = new Tensor({HIDDEN_DIM});
-  rtmp13 = new Tensor({HIDDEN_DIM});
-  rtmp14 = new Tensor({HIDDEN_DIM});
+  rtmp00 = new Tensor({HIDDEN_DIM, N});
+  rtmp01 = new Tensor({HIDDEN_DIM, N});
+  rtmp02 = new Tensor({HIDDEN_DIM, N});
+  rtmp03 = new Tensor({HIDDEN_DIM, N});
+  rtmp04 = new Tensor({HIDDEN_DIM, N});
+  rtmp10 = new Tensor({HIDDEN_DIM, N});
+  rtmp11 = new Tensor({HIDDEN_DIM, N});
+  rtmp12 = new Tensor({HIDDEN_DIM, N});
+  rtmp13 = new Tensor({HIDDEN_DIM, N});
+  rtmp14 = new Tensor({HIDDEN_DIM, N});
 
-  ztmp00 = new Tensor({HIDDEN_DIM});
-  ztmp01 = new Tensor({HIDDEN_DIM});
-  ztmp02 = new Tensor({HIDDEN_DIM});
-  ztmp03 = new Tensor({HIDDEN_DIM});
-  ztmp04 = new Tensor({HIDDEN_DIM});
-  ztmp10 = new Tensor({HIDDEN_DIM});
-  ztmp11 = new Tensor({HIDDEN_DIM});
-  ztmp12 = new Tensor({HIDDEN_DIM});
-  ztmp13 = new Tensor({HIDDEN_DIM});
-  ztmp14 = new Tensor({HIDDEN_DIM});
+  ztmp00 = new Tensor({HIDDEN_DIM, N});
+  ztmp01 = new Tensor({HIDDEN_DIM, N});
+  ztmp02 = new Tensor({HIDDEN_DIM, N});
+  ztmp03 = new Tensor({HIDDEN_DIM, N});
+  ztmp04 = new Tensor({HIDDEN_DIM, N});
+  ztmp10 = new Tensor({HIDDEN_DIM, N});
+  ztmp11 = new Tensor({HIDDEN_DIM, N});
+  ztmp12 = new Tensor({HIDDEN_DIM, N});
+  ztmp13 = new Tensor({HIDDEN_DIM, N});
+  ztmp14 = new Tensor({HIDDEN_DIM, N});
 
-  ntmp00 = new Tensor({HIDDEN_DIM});
-  ntmp01 = new Tensor({HIDDEN_DIM});
-  ntmp02 = new Tensor({HIDDEN_DIM});
-  ntmp03 = new Tensor({HIDDEN_DIM});
-  ntmp04 = new Tensor({HIDDEN_DIM});
-  ntmp05 = new Tensor({HIDDEN_DIM});
-  ntmp10 = new Tensor({HIDDEN_DIM});
-  ntmp11 = new Tensor({HIDDEN_DIM});
-  ntmp12 = new Tensor({HIDDEN_DIM});
-  ntmp13 = new Tensor({HIDDEN_DIM});
-  ntmp14 = new Tensor({HIDDEN_DIM});
-  ntmp15 = new Tensor({HIDDEN_DIM});
+  ntmp00 = new Tensor({HIDDEN_DIM, N});
+  ntmp01 = new Tensor({HIDDEN_DIM, N});
+  ntmp02 = new Tensor({HIDDEN_DIM, N});
+  ntmp03 = new Tensor({HIDDEN_DIM, N});
+  ntmp04 = new Tensor({HIDDEN_DIM, N});
+  ntmp05 = new Tensor({HIDDEN_DIM, N});
+  ntmp10 = new Tensor({HIDDEN_DIM, N});
+  ntmp11 = new Tensor({HIDDEN_DIM, N});
+  ntmp12 = new Tensor({HIDDEN_DIM, N});
+  ntmp13 = new Tensor({HIDDEN_DIM, N});
+  ntmp14 = new Tensor({HIDDEN_DIM, N});
+  ntmp15 = new Tensor({HIDDEN_DIM, N});
 
-  htmp00 = new Tensor({HIDDEN_DIM});
-  htmp01 = new Tensor({HIDDEN_DIM});
-  htmp02 = new Tensor({HIDDEN_DIM});
-  htmp10 = new Tensor({HIDDEN_DIM});
-  htmp11 = new Tensor({HIDDEN_DIM});
-  htmp12 = new Tensor({HIDDEN_DIM});
+  htmp00 = new Tensor({HIDDEN_DIM, N});
+  htmp01 = new Tensor({HIDDEN_DIM, N});
+  htmp02 = new Tensor({HIDDEN_DIM, N});
+  htmp10 = new Tensor({HIDDEN_DIM, N});
+  htmp11 = new Tensor({HIDDEN_DIM, N});
+  htmp12 = new Tensor({HIDDEN_DIM, N});
 
-  rfloats = new Tensor({N * MAX_LEN});
-  ftmp0 = new Tensor({NUM_CHAR});
-  char_prob = new Tensor({NUM_CHAR});
+//  rfloats = new Tensor({N * MAX_LEN});
+  rfloats = (float *)malloc(sizeof(float) * N * MAX_LEN);
+  ftmp0 = new Tensor({NUM_CHAR, N});
+  char_prob = new Tensor({NUM_CHAR, N});
 
-  CHECK_CUDA(cudaMalloc(&exps, sizeof(float) * NUM_CHAR));
+  CHECK_CUDA(cudaMalloc(&exps, sizeof(float) * NUM_CHAR * N));
   CHECK_CUDA(cudaMalloc(&sm_output_gpu, ((NUM_CHAR + 2048 - 1) / 2048) * sizeof(float)));
 
 }
@@ -509,15 +497,14 @@ __global__ void gpu_set_val(float *buf, int N, float val) {
 }
 
 void namegen(int N, float *random_floats, char *output) {
-  CHECK_CUDA(cudaMemcpy(rfloats->buf, random_floats, N * MAX_LEN * sizeof(float), cudaMemcpyHostToDevice));
+
+  memcpy(rfloats, random_floats, N * MAX_LEN * sizeof(float));
   memset(output, 0, N * (MAX_LEN + 1) * sizeof(char));
 
-  /* Generate N names */
-  for (int n = 0; n < N; n++) {
+    /* Generate N names */
     /* Initialize input and hidden vector. */
     /* One hidden vector for each GRU layer */
-//    input->buf[0] = SOS;
-    gpu_set_val<<<1, 1>>>(input->buf, 1, SOS);
+    gpu_set_val<<<(N+512-1)/512, 512>>>(input->buf, 1, SOS);
 
     dim3 gridDim1((hidden0->num_elem() + 512 - 1) / 512);
     dim3 blockDim1(512);
@@ -528,92 +515,87 @@ void namegen(int N, float *random_floats, char *output) {
 
     for (int l = 0; l < MAX_LEN; l++) {
       /* Embedding */
-      embedding(input, character_embedding, emb_out);
+      embedding(input, character_embedding, emb_out, N);
 
       /* First layer r */
-      matvec(W_ir0, emb_out, rtmp00);
-      matvec(W_hr0, hidden0, rtmp01);
-      elemwise_add(rtmp00, b_ir0, rtmp02);
-      elemwise_add(rtmp02, rtmp01, rtmp03);
-      elemwise_add(rtmp03, b_hr0, rtmp04);
-      elemwise_sigmoid(rtmp04, r0);
+      matvec(W_ir0, emb_out, rtmp00, N);
+      matvec(W_hr0, hidden0, rtmp01, N);
+      elemwise_add(rtmp00, b_ir0, rtmp02, N);
+      elemwise_add(rtmp02, rtmp01, rtmp03, N);
+      elemwise_add(rtmp03, b_hr0, rtmp04, N);
+      elemwise_sigmoid(rtmp04, r0, N);
 
       /* First layer z */
-      matvec(W_iz0, emb_out, ztmp00);
-      matvec(W_hz0, hidden0, ztmp01);
-      elemwise_add(ztmp00, b_iz0, ztmp02);
-      elemwise_add(ztmp02, ztmp01, ztmp03);
-      elemwise_add(ztmp03, b_hz0, ztmp04);
-      elemwise_sigmoid(ztmp04, z0);
+      matvec(W_iz0, emb_out, ztmp00, N);
+      matvec(W_hz0, hidden0, ztmp01, N);
+      elemwise_add(ztmp00, b_iz0, ztmp02, N);
+      elemwise_add(ztmp02, ztmp01, ztmp03, N);
+      elemwise_add(ztmp03, b_hz0, ztmp04, N);
+      elemwise_sigmoid(ztmp04, z0, N);
 
       /* First layer n */
-      matvec(W_in0, emb_out, ntmp00);
-      elemwise_add(ntmp00, b_in0, ntmp01);
-      matvec(W_hn0, hidden0, ntmp02);
-      elemwise_add(ntmp02, b_hn0, ntmp03);
-      elemwise_mul(r0, ntmp03, ntmp04);
-      elemwise_add(ntmp01, ntmp04, ntmp05);
-      elemwise_tanh(ntmp05, n0);
+      matvec(W_in0, emb_out, ntmp00, N);
+      elemwise_add(ntmp00, b_in0, ntmp01, N);
+      matvec(W_hn0, hidden0, ntmp02, N);
+      elemwise_add(ntmp02, b_hn0, ntmp03, N);
+      elemwise_mul(r0, ntmp03, ntmp04, N);
+      elemwise_add(ntmp01, ntmp04, ntmp05, N);
+      elemwise_tanh(ntmp05, n0, N);
 
       /* First layer h (hidden) */
-      elemwise_oneminus(z0, htmp00);
-      elemwise_mul(htmp00, n0, htmp01);
-      elemwise_mul(z0, hidden0, htmp02);
-      elemwise_add(htmp01, htmp02, hidden0);
+      elemwise_oneminus(z0, htmp00, N);
+      elemwise_mul(htmp00, n0, htmp01, N);
+      elemwise_mul(z0, hidden0, htmp02, N);
+      elemwise_add(htmp01, htmp02, hidden0, N);
 
       /* Second layer r */
-      matvec(W_ir1, hidden0, rtmp10);
-      matvec(W_hr1, hidden1, rtmp11);
-      elemwise_add(rtmp10, b_ir1, rtmp12);
-      elemwise_add(rtmp12, rtmp11, rtmp13);
-      elemwise_add(rtmp13, b_hr1, rtmp14);
-      elemwise_sigmoid(rtmp14, r1);
+      matvec(W_ir1, hidden0, rtmp10, N);
+      matvec(W_hr1, hidden1, rtmp11, N);
+      elemwise_add(rtmp10, b_ir1, rtmp12, N);
+      elemwise_add(rtmp12, rtmp11, rtmp13, N);
+      elemwise_add(rtmp13, b_hr1, rtmp14, N);
+      elemwise_sigmoid(rtmp14, r1, N);
 
       /* Second layer z */
-      matvec(W_iz1, hidden0, ztmp10);
-      matvec(W_hz1, hidden1, ztmp11);
-      elemwise_add(ztmp10, b_iz1, ztmp12);
-      elemwise_add(ztmp12, ztmp11, ztmp13);
-      elemwise_add(ztmp13, b_hz1, ztmp14);
-      elemwise_sigmoid(ztmp14, z1);
+      matvec(W_iz1, hidden0, ztmp10, N);
+      matvec(W_hz1, hidden1, ztmp11, N);
+      elemwise_add(ztmp10, b_iz1, ztmp12, N);
+      elemwise_add(ztmp12, ztmp11, ztmp13, N);
+      elemwise_add(ztmp13, b_hz1, ztmp14, N);
+      elemwise_sigmoid(ztmp14, z1, N);
 
-      /* Second layer n */
-      matvec(W_in1, hidden0, ntmp10);
-      elemwise_add(ntmp10, b_in1, ntmp11);
-      matvec(W_hn1, hidden1, ntmp12);
-      elemwise_add(ntmp12, b_hn1, ntmp13);
-      elemwise_mul(r1, ntmp13, ntmp14);
-      elemwise_add(ntmp11, ntmp14, ntmp15);
-      elemwise_tanh(ntmp15, n1);
+      /* Second layer n */ // error?
+      matvec(W_in1, hidden0, ntmp10, N);
+      elemwise_add(ntmp10, b_in1, ntmp11, N);
+      matvec(W_hn1, hidden1, ntmp12, N); // error?
+      elemwise_add(ntmp12, b_hn1, ntmp13, N);
+      elemwise_mul(r1, ntmp13, ntmp14, N);
+      elemwise_add(ntmp11, ntmp14, ntmp15, N);
+      elemwise_tanh(ntmp15, n1, N);
 
       /* Second layer h (hidden) */
-      elemwise_oneminus(z1, htmp10);
-      elemwise_mul(htmp10, n1, htmp11);
-      elemwise_mul(z1, hidden1, htmp12);
-      elemwise_add(htmp11, htmp12, hidden1);
+      elemwise_oneminus(z1, htmp10, N);
+      elemwise_mul(htmp10, n1, htmp11, N);
+      elemwise_mul(z1, hidden1, htmp12, N);
+      elemwise_add(htmp11, htmp12, hidden1, N);
 
       /* Fully connected layer */
-      matvec(W_fc, hidden1, ftmp0);
-      elemwise_add(ftmp0, b_fc, f);
-
+      matvec(W_fc, hidden1, ftmp0, N);
+      elemwise_add(ftmp0, b_fc, f, N);
       /* Softmax */
-      softmax(f, char_prob);
+      softmax(f, char_prob, N);
       
       /* Random select */
-      int selected_char;
-      int* selected_char_gpu;
-      CHECK_CUDA(cudaMalloc(&selected_char_gpu, sizeof(int)));
-
-      gpu_random_select<<<1, 1>>>(char_prob->buf, rfloats->buf, n * MAX_LEN + 1, char_prob->num_elem(), selected_char_gpu);
-      CHECK_CUDA(cudaMemcpy(&selected_char, selected_char_gpu, sizeof(int), cudaMemcpyDeviceToHost));
-      
-      gpu_set_val<<<1, 1>>>(input->buf, 1, selected_char);
-      output[n * (MAX_LEN + 1) + l] = selected_char;
-
-      if (selected_char == EOS)
-        break;
+      // float* char_prob_cpu;
+      // size_t lenCharProb = char_prob->num_elem() / N;
+      // CHECK_CUDA(cudaMallocHost(&char_prob_cpu, sizeof(float) * lenCharProb));
+      // CHECK_CUDA(cudaMemcpy(char_prob_cpu, char_prob->buf, sizeof(float) * lenCharProb, cudaMemcpyDeviceToHost));
+      // for(int n=0; n<N; n++){
+      //   int selected_char = random_select(char_prob_cpu + (n*lenCharProb), rfloats, n * MAX_LEN + l, lenCharProb);        
+      //   gpu_set_val<<<1, 1>>>(input->buf, 1, selected_char);
+      //   output[n * (MAX_LEN + 1) + l] = selected_char;
+      // }
     }
-  }
 }
 
 /*
