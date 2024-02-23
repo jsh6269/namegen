@@ -109,8 +109,8 @@ __global__ void gpu_embedding(float* input, float* weight, float* output, size_t
 
 void embedding(Tensor *input, Tensor *weight, Tensor *output) {
   size_t n = weight->shape[1];
-  dim3 gridDim((n + 512 - 1) / 512);
-  dim3 blockDim(512);
+  dim3 gridDim((n + 64 - 1) / 64);
+  dim3 blockDim(64);
   gpu_embedding<<<gridDim, blockDim>>>(input->buf, weight->buf, output->buf, n);
 }
 
@@ -131,8 +131,8 @@ __global__ void gpu_elemwise_add(float* input1, float* input2, float* output, si
 
 void elemwise_add(Tensor *input1, Tensor *input2, Tensor *output) {
   size_t sn = input1->num_elem();
-  dim3 gridDim((sn + 512 - 1) / 512);
-  dim3 blockDim(512);
+  dim3 gridDim((sn + 64 - 1) / 64);
+  dim3 blockDim(64);
   gpu_elemwise_add<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn);
 }
 
@@ -153,8 +153,8 @@ __global__ void gpu_elemwise_oneminus(float *input, float *output, size_t n){
 
 void elemwise_oneminus(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
-  dim3 gridDim((n + 512 - 1) / 512);
-  dim3 blockDim(512);
+  dim3 gridDim((n + 64 - 1) / 64);
+  dim3 blockDim(64);
   gpu_elemwise_oneminus<<<gridDim, blockDim>>>(input->buf, output->buf, n);
 }
 
@@ -175,8 +175,8 @@ __global__ void gpu_elemwise_mul(float *input1, float *input2, float *output, si
 
 void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
   size_t sn = input1->num_elem();
-  dim3 gridDim((sn + 512 - 1) / 512);
-  dim3 blockDim(512);
+  dim3 gridDim((sn + 64 - 1) / 64);
+  dim3 blockDim(64);
   gpu_elemwise_mul<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn);
 }
 
@@ -197,8 +197,8 @@ __global__ void gpu_elemwise_tanh(float *input, float *output, size_t n){
 
 void elemwise_tanh(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
-  dim3 gridDim((n + 512 - 1) / 512);
-  dim3 blockDim(512);
+  dim3 gridDim((n + 64 - 1) / 64);
+  dim3 blockDim(64);
   gpu_elemwise_tanh<<<gridDim, blockDim>>>(input->buf, output->buf, n);
 }
 
@@ -217,8 +217,8 @@ __global__ void gpu_elemwise_sigmoid(float *input, float *output, size_t n) {
 }
 void elemwise_sigmoid(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
-  dim3 gridDim((n + 512 - 1) / 512);
-  dim3 blockDim(512);
+  dim3 gridDim((n + 64 - 1) / 64);
+  dim3 blockDim(64);
   gpu_elemwise_sigmoid<<<gridDim, blockDim>>>(input->buf, output->buf, n);
 }
 
@@ -243,8 +243,8 @@ __global__ void gpu_matvec(float *gpu_input1, float *gpu_input2, float *gpu_outp
 void matvec(Tensor *input1, Tensor *input2, Tensor *output) {
   size_t N_ = input1->shape[0];
   size_t K_ = input1->shape[1];
-  dim3 gridDim((N_ + 512 - 1) / 512);
-  dim3 blockDim(512);
+  dim3 gridDim((N_ + 64 - 1) / 64);
+  dim3 blockDim(64);
   gpu_matvec<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, N_, K_);
 }
 
@@ -324,8 +324,8 @@ float sum_gpu(size_t num_elements, float* input_gpu, float* sm_output_gpu){
     size_t output_elements = (num_elements + 2048 - 1) / 2048;
 
     dim3 gridDim(output_elements);
-    dim3 blockDim(1024);
-    sum_kernel<<<gridDim, blockDim, 1024 * sizeof(float), 0>>>(input_gpu, sm_output_gpu, num_elements);
+    dim3 blockDim(64);
+    sum_kernel<<<gridDim, blockDim, 64 * sizeof(float), 0>>>(input_gpu, sm_output_gpu, num_elements);
 
     float sum = 0.0;
     float* output_cpu = (float*)malloc(sizeof(float) * output_elements);
@@ -342,8 +342,8 @@ void softmax(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
 
   // total n
-  dim3 gridDim((n + 512 - 1) / 512);
-  dim3 blockDim(512);
+  dim3 gridDim((n + 64 - 1) / 64);
+  dim3 blockDim(64);
 
   gpu_expf<<<gridDim, blockDim>>>(input->buf, exps, n);
   // barrier?
@@ -517,11 +517,11 @@ void namegen(int N, float *random_floats, char *output) {
     /* One hidden vector for each GRU layer */
     gpu_set_val<<<1, 1>>>(input->buf, 1, SOS);
 
-    dim3 gridDim1((hidden0->num_elem() + 512 - 1) / 512);
-    dim3 blockDim1(512);
+    dim3 gridDim1((hidden0->num_elem() + 64 - 1) / 64);
+    dim3 blockDim1(64);
     gpu_set_val<<<gridDim1, blockDim1>>>(hidden0->buf, hidden0->num_elem(), 0);
-    dim3 gridDim2((hidden1->num_elem() + 512 - 1) / 512);
-    dim3 blockDim2(512);
+    dim3 gridDim2((hidden1->num_elem() + 64 - 1) / 64);
+    dim3 blockDim2(64);
     gpu_set_val<<<gridDim2, blockDim2>>>(hidden1->buf, hidden1->num_elem(), 0);
 
     for (int l = 0; l < MAX_LEN; l++) {
