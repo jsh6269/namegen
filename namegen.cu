@@ -109,8 +109,8 @@ __global__ void gpu_embedding(float* input, float* weight, float* output, size_t
 
 void embedding(Tensor *input, Tensor *weight, Tensor *output) {
   size_t n = weight->shape[1];
-  dim3 gridDim((n + 64 - 1) / 64);
-  dim3 blockDim(64);
+  dim3 gridDim((n + 1024 - 1) / 1024);
+  dim3 blockDim(1024);
   gpu_embedding<<<gridDim, blockDim>>>(input->buf, weight->buf, output->buf, n);
 }
 
@@ -194,8 +194,8 @@ __global__ void gpu_elemwise_mul(float *input1, float *input2, float *output, si
 
 void elemwise_mul(Tensor *input1, Tensor *input2, Tensor *output) {
   size_t sn = input1->num_elem();
-  dim3 gridDim((sn + 64 - 1) / 64);
-  dim3 blockDim(64);
+  dim3 gridDim((sn + 1024 - 1) / 1024);
+  dim3 blockDim(1024);
   gpu_elemwise_mul<<<gridDim, blockDim>>>(input1->buf, input2->buf, output->buf, sn);
 }
 
@@ -253,8 +253,8 @@ __global__ void gpu_elemwise_sigmoid(float *input, float *output, size_t n) {
 }
 void elemwise_sigmoid(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
-  dim3 gridDim((n + 64 - 1) / 64);
-  dim3 blockDim(64);
+  dim3 gridDim((n + 1024 - 1) / 1024);
+  dim3 blockDim(1024);
   gpu_elemwise_sigmoid<<<gridDim, blockDim>>>(input->buf, output->buf, n);
 }
 
@@ -270,6 +270,7 @@ __global__ void gpu_matvec(float *gpu_input1, float *gpu_input2, float *gpu_outp
     return;
   }
   float c = 0.0;
+  #pragma unroll(64)
   for (size_t j = 0; j < K_; j++) {
     c += gpu_input1[tidx * K_ + j] * gpu_input2[j];
   }
@@ -398,8 +399,8 @@ void softmax(Tensor *input, Tensor *output) {
   size_t n = input->num_elem();
 
   // total n
-  dim3 gridDim((n + 64 - 1) / 64);
-  dim3 blockDim(64);
+  dim3 gridDim((n + 512 - 1) / 512);
+  dim3 blockDim(512);
 
   gpu_expf<<<gridDim, blockDim>>>(input->buf, exps, n);
   // barrier?
