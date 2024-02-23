@@ -1,4 +1,4 @@
-# Namegen
+# Namegen Forward
 ##  CPU  
     Generating 20 names...Done!  
     First 8 results are: Karlen, Elisah, Devonda, Stephen, Christiano, Mikelle, Madaline, Benuel  
