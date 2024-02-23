@@ -14,6 +14,7 @@ Writing to output.txt ...Done!
 Elapsed time: 0.168789 seconds  
 Throughput: 118.491 names/sec  
   
+- for larger N  
 Generating 256 names...Done!  
 First 8 results are: Karlen, Elisah, Devonda, Stephen, Christiano, Mikelle, Madaline, Benuel  
 Writing to output.txt ...Done!  
