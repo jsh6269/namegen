@@ -11,12 +11,12 @@ Throughput: 13.091 names/sec
 Generating 20 names...Done!  
 First 8 results are: Karlen, Elisah, Devonda, Stephen, Christiano, Mikelle, Madaline, Benuel  
 Writing to output.txt ...Done!  
-Elapsed time: 0.168789 seconds  
-Throughput: 118.491 names/sec  
+Elapsed time: 0.155519 seconds  
+Throughput: 128.602 names/sec  
   
 - for larger N  
 Generating 256 names...Done!  
 First 8 results are: Karlen, Elisah, Devonda, Stephen, Christiano, Mikelle, Madaline, Benuel  
 Writing to output.txt ...Done!  
-Elapsed time: 1.956048 seconds  
-Throughput: 130.876 names/sec  
+Elapsed time: 1.756758 seconds  
+Throughput: 145.723 names/sec  
